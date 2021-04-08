@@ -41,6 +41,11 @@ f = open("extra/salt.txt", "r")
 salt = f.readline().encode()
 f.close()
 
+@app.route('/')
+def index():
+    return "<h1>Welcome to our server !!</h1>"
+
+
 # route to log in to the application
 # we can only POST to the API
 @app.route("/api/login", methods=["POST"])
