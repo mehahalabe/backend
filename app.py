@@ -5,15 +5,18 @@ import pymongo
 from passlib.hash import pbkdf2_sha256
 # cors is used to relax security, only for development
 from flask_cors import CORS
-
+# import class from config.py
+from config import BaseConfig
 # import password_strength to ensure the user's password is strong
 from password_strength import PasswordPolicy
 # use bcrypt to hash the email such that the same string hash the same hash
 import bcrypt
 # Needed to verify the server is who it says it is. Mac won't work without and Cloud stuff might not either.
 import certifi
-# create a Flask app
+#Used to have proper log statements until error handling is fully implented
 import sys
+# create a Flask app
+import json
 app = Flask(__name__)
 CORS(app)
 
@@ -25,6 +28,10 @@ Account_Info = User_DB.users
 
 Project_DB = client.get_database('project_information')
 Project_Info = Project_DB.projects
+
+
+Datasets_DB = client.get_database('dataset_information')
+Datasets_Info = Datasets_DB.datasets
 
 # create a password policy to ensure strong passwords from users
 policy = PasswordPolicy.from_names(
@@ -39,11 +46,10 @@ policy = PasswordPolicy.from_names(
 f = open("extra/salt.txt", "r")
 salt = f.readline().encode()
 f.close()
-
+#route to see that backend is running 
 @app.route('/')
 def index():
     return "<h1>Welcome to our server !!</h1>"
-
 
 # route to log in to the application
 # we can only POST to the API
@@ -114,6 +120,8 @@ def newproject():
         projpassword = request.json["password"]
         projectname = request.json["projName"]
         desc = request.json["description"]
+        cap = 100
+        used = 0
         # confirm the password the user chooses is strong
         #if len(policy.test(projpassword)) > 0:
          #   return jsonify({"error": "Password is not strong enough. Minimums: 8 characters, 1 uppercase, 1 number, 1 special"})
@@ -122,7 +130,7 @@ def newproject():
         if Project_Info.find_one({"projectid": projectID}) is not None:
             return jsonify({"error": "Project with that ID already exists"})
         else:
-            Project_Info.insert_one({"projName":projectname, "projectid":projectID,"password":pbkdf2_sha256.hash(projpassword), "description":desc})
+            Project_Info.insert_one({"projName":projectname, "projectid":projectID,"password":pbkdf2_sha256.hash(projpassword), "description":desc, "cap1": cap, "cap2": cap, "used1": used, "used2":used})
             
         return jsonify({"success": True})
     except:
@@ -148,10 +156,58 @@ def dashboard():
         return jsonify({"error": "Invalid form"})
      
 
-@app.route("/api/hardware", methods=["GET"])
+@app.route("/api/hardware", methods=["POST"])
 def hardware():
-    return Hardware_Info
+    try:
+        #Get the set info from the request 
+        print(request.json)
+        set1val = request.json["set1"]
+        set2val = request.json['set2']
+        check1 = request.json["check1"].lower()
+        check2 = request.json["check2"].lower()
+        id = request.json["id"]
 
+        if Project_Info.find_one({"projectid": id}) is not None:
+            result = Project_Info.find_one({"projectid": id})
+            used1 = result.get("used1")
+            cap1 = result.get("cap1")
+            used2 = result.get("used2")
+            cap2 = result.get("cap2")
+
+            if check1 == "out":                
+                used1 = result.get("used1") + int(set1val)   
+                cap1 = result.get("cap1") - int(set1val) 
+
+            if check1 == "in":
+                used1 = result.get("used1") - int(set1val) 
+                cap1 = result.get("cap1") + int(set1val) 
+
+            if check2 == "out":                
+                used2 = result.get("used2") + int(set2val)   
+                cap2 = result.get("cap2") - int(set2val) 
+
+            if check2 == "in":
+                used2 = result.get("used2") - int(set2val) 
+                cap2 = result.get("cap2") + int(set2val)     
+
+            if cap1 > 100 or cap1 < 0:
+                return jsonify({"error": "Set 1 value invalid"})
+            if cap2 > 100 or cap2 < 0:
+                return jsonify({"error": "Set 2 value invalid"})
+        
+            Project_Info.update_one({"projectid": id}, {"$set": { "used1": int(used1), "used2": int(used2), "cap1": int(cap1), "cap2": int(cap2)}})
+            result = Project_Info.find_one({"projectid": id})
+            del result['_id'] 
+            return result
+            return jsonify({"success": True})
+        else:
+        #  if a project with projectID does not exist, send a feedback message
+            return jsonify({"error": "Project does not Exist"})
+    except:
+        print("Unexpected error:", sys.exc_info()[0])
+        return jsonify({"error": "Problem with Form"})
+
+     
 
 # API to delete a project
 # Params:
@@ -209,12 +265,10 @@ def projectdetails():
     # projectid: required if accountType is "project"
 @app.route("/api/updatepassword", methods=["POST"])
 def updatepassword():
-    print(request)
     try:
         currentPassword = request.json["currentPassword"]
         newPassword = request.json["newPassword"]
 
-        print(currentPassword, newPassword)
         # This should be either "project" or "user"
         accountType = request.json["accountType"]
 
@@ -256,6 +310,19 @@ def updatepassword():
         print("Unexpected error:", sys.exc_info()[0])
         return jsonify({"error": "Problem with Form"})
 
+#API to pull the list of datasets from the database
+@app.route("/api/getdatasets", methods=["GET"])
+def getdatasets():
+    try:
+        datasets = Datasets_Info.find({}, { "name": 1, "link": 1, "_id": 0, "description": 1}).limit(10)
+        # for dataset in datasets:
+        #     print(dataset, type(dataset))
+        sets = {}
+        sets["datasets"] = datasets
+        return json.dumps(sets)
+    except:
+        print("Unexpected error:", sys.exc_info()[0])
+        return jsonify({"error": "Problem with Form"})
 
 if __name__ == "__main__":
     app.run(debug=True) # debug=True restarts the server everytime we make a change in our code
